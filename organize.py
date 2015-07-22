@@ -2,6 +2,7 @@ import argparse
 import datetime
 import hashlib
 import os
+import pickle
 import shutil
 import uuid
 
@@ -45,8 +46,46 @@ def get_exif_tags(filepath):
     """Returns the EXIF tags for a file."""
 
     with open(filepath, "rb") as f:
-        tags = exifread.process_file(f)
+        tags = exifread.process_file(f, details=False)
     return tags
+
+
+def organize_file(filepath, organized_dir):
+    """Copies a file to organized_dir with a date-based directory structure."""
+
+    exif_date_tag = "EXIF DateTimeOriginal"
+    exif_date_format = "%Y:%m:%d %H:%M:%S"
+    filename_format = "%Y-%m-%d %H.%M.%S"
+
+    ext = os.path.splitext(filepath)[1]
+    tags = get_exif_tags(filepath)
+
+    if exif_date_tag in tags:
+        # has the proper EXIF data
+        pictime_str = str(tags[exif_date_tag])
+        pictime = datetime.datetime.strptime(pictime_str, exif_date_format)
+
+        yearstr = pictime.strftime("%Y")
+        monthstr = pictime.strftime("%m")
+        daystr = pictime.strftime("%d")
+        sort_dir = os.path.join(organized_dir, "{}/{}/{}".format(yearstr, monthstr, daystr))
+        filename = pictime.strftime(filename_format) + ext.lower()
+    else:
+        # doesn't have the proper EXIF data
+        sort_dir = os.path.join(organized_dir, "no_EXIF")
+        filename = os.path.basename(filepath)
+
+    # make the directory to copy into if necessary
+    if not os.path.exists(sort_dir):
+        os.makedirs(sort_dir)
+
+    # if file already exists, give it a unique name
+    if os.path.exists(os.path.join(sort_dir, filename)):
+        name, ext = os.path.splitext(filename)
+        filename = name + " " + str(uuid.uuid4()) + ext
+
+    # copy the file
+    shutil.copy(filepath, os.path.join(sort_dir, filename))
 
 
 def organize(messy_dir, organized_dir):
@@ -58,52 +97,46 @@ def organize(messy_dir, organized_dir):
     Duplicate files are not copied.
     """
 
-    exif_date_tag = "EXIF DateTimeOriginal"
-    exif_date_format = "%Y:%m:%d %H:%M:%S"
-    filename_format = "%Y-%m-%d %H:%M:%S"
+    hashes_filename = "hashes.pickle"
 
     # make the new directory if necessary
-    if not os.path.exists(organized_dir):
+    if not os.path.isdir(organized_dir):
         os.mkdir(organized_dir)
 
-    uniques, dupes = find_duplicates(messy_dir)
-    print("unique/duplicates: {}/{}".format(len(uniques), len(dupes)))
+    # load/create the hashes already in the organized directory
+    hashes = []
+    if os.path.isfile(os.path.join(organized_dir, hashes_filename)):
+        with open(os.path.join(organized_dir, hashes_filename), "rb") as f:
+            hashes = pickle.load(f)
+    else:
+        hashes, _ = find_duplicates(organized_dir)
+        hashes = list(hashes.keys())
 
-    files_copied = 0
+    uniques_found = 0
+    dupes_found = 0
 
-    for filepath in uniques.values():
-        ext = os.path.splitext(filepath)[1]
-        tags = get_exif_tags(filepath)
+    # recursively organize the files in messy_dir
+    for dirpath, dirnames, filenames in os.walk(messy_dir):
+        for filename in filenames:
+            # ignore hidden files
+            if filename[0] == ".":
+                continue
 
-        if exif_date_tag in tags:
-            # has the proper EXIF data
-            pictime_str = str(tags[exif_date_tag])
-            pictime = datetime.datetime.strptime(pictime_str, exif_date_format)
+            filepath = os.path.join(dirpath, filename)
+            filehash = hash_file(filepath)
+            # only sort unique files
+            if filehash not in hashes:
+                hashes.append(filehash)
+                organize_file(filepath, organized_dir)
+                uniques_found += 1
+            else:
+                dupes_found += 1
 
-            yearstr = pictime.strftime("%Y")
-            monthstr = pictime.strftime("%m")
-            daystr = pictime.strftime("%d")
-            sort_dir = os.path.join(organized_dir, "{}/{}/{}".format(yearstr, monthstr, daystr))
-            filename = pictime.strftime(filename_format) + ext.lower()
-        else:
-            # doesn't have the proper EXIF data
-            sort_dir = os.path.join(organized_dir, "no_EXIF")
-            filename = os.path.basename(filepath)
+    # save the hashes
+    with open(os.path.join(organized_dir, hashes_filename), "wb") as f:
+        pickle.dump(hashes, f)
 
-        # make the directory to copy into if necessary
-        if not os.path.exists(sort_dir):
-            os.makedirs(sort_dir)
-
-        # if file already exists, give it a unique name
-        if os.path.exists(os.path.join(sort_dir, filename)):
-            name, ext = os.path.splitext(filename)
-            filename = name + " " + str(uuid.uuid4()) + ext
-
-        # copy the file
-        shutil.copy(filepath, os.path.join(sort_dir, filename))
-        files_copied += 1
-
-    print("organized {} files".format(files_copied))
+    print("uniques/dupes: {}/{}".format(uniques_found, dupes_found))
 
 
 if __name__ == "__main__":
