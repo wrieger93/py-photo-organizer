@@ -4,6 +4,7 @@ import hashlib
 import os
 import pickle
 import shutil
+import sys
 import uuid
 
 import exifread
@@ -115,6 +116,11 @@ def organize(messy_dir, organized_dir):
     uniques_found = 0
     dupes_found = 0
 
+    # find the total files for progress printing
+    total_files = 0
+    for _, _, filenames in os.walk(messy_dir):
+        total_files += len([f for f in filenames if f[0] != "."])
+
     # recursively organize the files in messy_dir
     for dirpath, dirnames, filenames in os.walk(messy_dir):
         for filename in filenames:
@@ -132,11 +138,15 @@ def organize(messy_dir, organized_dir):
             else:
                 dupes_found += 1
 
+            # print the progress
+            sys.stdout.write("\r{}/{}, {} uniques, {} dupes".format(uniques_found + dupes_found, total_files, uniques_found, dupes_found))
+            sys.stdout.flush()
+
     # save the hashes
     with open(os.path.join(organized_dir, hashes_filename), "wb") as f:
         pickle.dump(hashes, f)
 
-    print("uniques/dupes: {}/{}".format(uniques_found, dupes_found))
+    print()
 
 
 if __name__ == "__main__":
